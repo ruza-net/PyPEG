@@ -130,7 +130,7 @@ class ParserElement:
         return optional(self)
 
     def spr(self):
-        return supress(self)
+        return suppress(self)
 
     def __add__(self, other):
         if not isinstance(other, ParserElement):
@@ -329,6 +329,8 @@ class union(ParserElement):
         return str(self.a) + ' | ' + str(self.b)
 
     def parse(self, string, **kw):
+        print(string)
+
         try:
             string, a = self.a.parse(string, **kw)
 
@@ -432,11 +434,11 @@ class counter(ParserElement):
         return string, out
 
 
-class supress(ParserElement):
+class suppress(ParserElement):
     __slots__ = ['el']
 
     def __init__(self, element):
-        super(supress, self).__init__('')
+        super(suppress, self).__init__('')
 
         self.el = element
 
@@ -562,7 +564,7 @@ class combinator(ParserElement):
         return string, out
 
 
-# Expression helper
+# Expression helper (actually, it's not helper, it can't be replaced by (simple) PyPEG expression)
 
 class expr(ParserElement):
     class Associativity:
@@ -605,10 +607,8 @@ class expr(ParserElement):
         exp &= factor + (op + factor)[0:]
 
         self.expr = exp
-
-        self.operand = operand
-
         self.ops = operators
+        self.operand = operand
 
     def parse(self, string, **kw):
         string, a = self.expr.parse(string, **kw)
@@ -623,23 +623,18 @@ class expr(ParserElement):
 
 # Pointer to parser element (can be used for recursive grammars)
 
-__pointers__ = []
-
-
 class ptr(ParserElement):
-    __slots__ = ['id']
+    __slots__ = ['e']
 
     def __init__(self):
         super(ptr, self).__init__('')
 
-        self.id = len(__pointers__)
-
-        __pointers__.append(None)
+        self.e = None
 
     def __iand__(self, other):
-        __pointers__[self.id] = other
+        self.e = other
 
         return self
 
     def parse(self, string, **kw):
-        return __pointers__[self.id].parse(string, **kw)
+        return self.e.parse(string, **kw)
