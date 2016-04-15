@@ -9,112 +9,7 @@ __email__ = 'jan.ruzicka01@gmail.com'
 __version__ = '0.1'
 
 
-# Utility functions
-
-
-def cut_off(a, string, **kw):
-    l = list(map(len, a))
-
-    for x in l:
-        string = replace_ignored(string, **kw)[x:]
-
-    return string
-
-
-def replace_ignored(string, **kw):
-    ig = kw.get('ignore', None)
-    sep = kw.get('sep', None)
-
-    if ig is not None and type(ig) is not str:
-        raise TypeError('Expected str, got {}!'.format(type(ig)))
-
-    while True:
-        if sep is not None and string[:len(sep)] == sep:
-            string = string[len(sep):]
-
-            sep = None
-
-        elif ig is not None and string[:len(ig)] == ig:
-            string = string[len(ig):]
-
-        else:
-            break
-
-    return string
-
-
-def separate(string, **kw):
-    sep = kw.get('sep', None)
-
-    if sep is not None and type(sep) is not str:
-        raise TypeError('Expected str, got {}!'.format(type(sep)))
-
-    return string.split(sep)
-
-
-def check_whole(string, **kw):
-    string = replace_ignored(string, **kw)
-
-    if len(string) > 0 and not kw.get('not_whole', False):
-        raise ParseError('Full string cannot be matched, this remains: "{}"'.format(string))
-
-
-def recursive_reverse(lst):
-    if type(lst) is list:
-        lst = lst[::-1]
-
-        for i, x in enumerate(lst):
-            if type(x) in {list, tuple}:
-                lst[i] = recursive_reverse(x)
-
-    return lst
-
-
-def associate(ops, a):
-    for i, x in enumerate(a):
-        if type(x) is list:
-            a[i] = associate(ops, x)
-
-    for o in ops:
-        i = 0
-
-        if o[2] == expr.Associativity.RIGHT:
-            a = recursive_reverse(a)
-
-        while i < len(a):
-            x = a[i]
-
-            try:
-                o[0].parse(x)
-
-                if o[1] == expr.Type.UNARY:
-                    a = a[:i-1] + [a[i-1:i+1]] + a[i+1:]
-
-                else:
-                    a = a[:i-1] + [a[i-1:i+2]] + a[i+2:]
-
-                i = 0
-                continue
-
-            except ParseError:
-                pass
-
-            i += 1
-
-        if o[2] == expr.Associativity.RIGHT:
-            a = recursive_reverse(a)
-
-    while len(a) == 1 and type(a[0]) is list:
-        a = a[0]
-
-    return a
-
-
-# Primitive classes
-
-
-class ParseError(Exception):
-    pass
+# Primitive class
 
 
 class ParserElement:
@@ -130,7 +25,7 @@ class ParserElement:
         return optional(self)
 
     def spr(self):
-        return supress(self)
+        return suppress(self)
 
     def __add__(self, other):
         if not isinstance(other, ParserElement):
@@ -285,7 +180,11 @@ class r(ParserElement):
         return 'r\'{}\''.format(self.pattern.pattern)
 
     def parse(self, string, **kw):
-        a = self.pattern.match(string)
+        try:
+            a = self.pattern.match(string)
+
+        except TypeError:
+            raise ParseError('Can match a non-string!')
 
         if a is None:
             string = replace_ignored(string, **kw)
@@ -309,6 +208,9 @@ class group(ParserElement):
         super(group, self).__init__('')
 
         self.e = el
+
+    def __str__(self):
+        return '[{}]'.format(self.e)
 
     def parse(self, string, **kw):
         string, a = self.e.parse(string, **kw)
@@ -432,13 +334,16 @@ class counter(ParserElement):
         return string, out
 
 
-class supress(ParserElement):
+class suppress(ParserElement):
     __slots__ = ['el']
 
     def __init__(self, element):
-        super(supress, self).__init__('')
+        super(suppress, self).__init__('')
 
         self.el = element
+
+    def __str__(self):
+        return 'suppress({})'.format(self.el)
 
     def parse(self, string, **kw):
         string, _ = self.el.parse(string, **kw)
@@ -562,7 +467,7 @@ class combinator(ParserElement):
         return string, out
 
 
-# Expression helper
+# Helpers
 
 class expr(ParserElement):
     class Associativity:
@@ -605,12 +510,13 @@ class expr(ParserElement):
         exp &= factor + (op + factor)[0:]
 
         self.expr = exp
-
+        self.ops = operators
         self.operand = operand
 
-        self.ops = operators
-
     def parse(self, string, **kw):
+        kw = kw.copy()
+        kw['not_whole'] = True
+
         string, a = self.expr.parse(string, **kw)
 
         a = associate(self.ops, a)
@@ -618,28 +524,60 @@ class expr(ParserElement):
         if len(a) > 1:
             a = [a]
 
+        check_whole(string, **kw)
+
+        return string, a
+
+
+class delim_lst(ParserElement):
+    __slots__ = ['e', 's', 'aloc', 'min', 'max']
+
+    def __init__(self, el, sep, at_least_one_comma=True, min=0, max=None):
+        super(delim_lst, self).__init__('')
+
+        self.e = el
+        self.s = sep
+
+        self.min = min
+        self.max = max
+
+        self.aloc = at_least_one_comma
+
+    def parse(self, string, **kw):
+        string, a = (self.e + (self.s + self.e)[self.min:self.max]).parse(string, **kw)
+
+        if self.aloc:
+            elements = []
+
+            for x in a:
+                try:
+                    self.e.parse(x)
+
+                    elements.append(x)
+
+                except ParseError:
+                    pass
+
+            if len(elements) < 2:
+                raise ParseError('Delimited list has no comma!')
+
         return string, a
 
 
 # Pointer to parser element (can be used for recursive grammars)
 
-__pointers__ = []
-
-
 class ptr(ParserElement):
-    __slots__ = ['id']
+    __slots__ = ['e']
 
     def __init__(self):
         super(ptr, self).__init__('')
 
-        self.id = len(__pointers__)
-
-        __pointers__.append(None)
+        self.e = None
 
     def __iand__(self, other):
-        __pointers__[self.id] = other
+        self.e = other
 
         return self
 
     def parse(self, string, **kw):
-        return __pointers__[self.id].parse(string, **kw)
+        return self.e.parse(string, **kw)
