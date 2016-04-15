@@ -6,9 +6,13 @@ __email__ = 'jan.ruzicka01@gmail.com'
 __version__ = '0.1'
 
 
+# Classes to help the parser.
+
 class ParseError(Exception):
     pass
 
+
+# Functions used to process AST.
 
 def r_zip(a, b):
     if len(a) > len(b):
@@ -26,9 +30,6 @@ def r_zip(a, b):
         out.append((x, next(c)))
 
     return out
-
-
-# Utility functions
 
 
 def cut_off(a, string, **kw):
@@ -94,7 +95,47 @@ def associate(ops, a):
         if type(x) is list:
             a[i] = associate(ops, x)
 
-    for o in ops:
+    # Hunt for unary operators
+
+    for o in [x for x in ops if x[1] == 0]:
+        i = 0
+
+        while i < len(a):
+            x = a[i]
+
+            try:
+                o[0].parse(x)
+
+                if i > 0:
+                    binary_check = []  # Check for conflicts (e.g. binary plus confused with unary plus).
+
+                    for x in [x for x in ops if x[1] == 1]:
+                        try:
+                            binary_check.append(x[0].parse(a[i-1]))
+
+                        except ParseError:
+                            continue
+
+                    if len(binary_check) == 0:
+                        i += 1
+
+                        continue
+
+                if o[2] == 0:
+                    a = a[:i] + [a[i:i+2]] + a[i+2:]
+
+                else:
+                    a = a[:i-1] + [a[i-1:i+1]] + a[i+1:]
+
+                i = 0
+                continue
+
+            except ParseError:
+                pass
+
+            i += 1
+
+    for o in [x for x in ops if x[1] == 1]:
         i = 0
 
         if o[2] == 1:  # Right associative
@@ -106,11 +147,7 @@ def associate(ops, a):
             try:
                 o[0].parse(x)
 
-                if o[1] == 0:  # Unary operator
-                    a = a[:i-1] + [a[i-1:i+1]] + a[i+1:]
-
-                else:
-                    a = a[:i-1] + [a[i-1:i+2]] + a[i+2:]
+                a = a[:i-1] + [a[i-1:i+2]] + a[i+2:]
 
                 i = 0
                 continue
@@ -127,3 +164,12 @@ def associate(ops, a):
         a = a[0]
 
     return a
+
+
+# Functions to help constructing grammar.
+
+def singleton(cls):
+    obj = cls()
+    obj.__name__ = cls.__name__
+
+    return obj

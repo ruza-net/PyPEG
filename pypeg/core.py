@@ -488,26 +488,55 @@ class expr(ParserElement):
             elif o[2] not in [0, 1]:
                 raise ValueError('Invalid associativity!')
 
-        op = None
+        b_op = EMPTY
+
+        u_op_l = EMPTY  # A binary operator that stands at left from its operand.
+        u_op_r = EMPTY  # A binary operator that stands at right from its operand.
 
         for i, x in enumerate(operators):
-            if op is None:
-                op = x[0]
+            if x[1] == expr.Type.BINARY:
+                if b_op is EMPTY:
+                    b_op = x[0]
 
-                if not isinstance(op, ParserElement):
-                    op = s(op)
+                    if not isinstance(b_op, ParserElement):
+                        b_op = s(b_op)
+
+                else:
+                    b_op |= x[0]
 
             else:
-                op |= x[0]
+                if x[2] == expr.Associativity.LEFT:
+                    if u_op_l is EMPTY:
+                        u_op_l = x[0]
+
+                        if not isinstance(u_op_l, ParserElement):
+                            u_op_l = s(u_op_l)
+
+                    else:
+                        u_op_l |= x[0]
+
+                else:
+                    if u_op_r is EMPTY:
+                        u_op_r = x[0]
+
+                        if not isinstance(u_op_r, ParserElement):
+                            u_op_r = s(u_op_r)
+
+                    else:
+                        u_op_r |= x[0]
 
         lp = s(lp).spr()
         rp = s(rp).spr()
 
         exp = ptr()
 
-        factor = operand | [lp + exp + rp]
+        factor_generic = operand | [lp + exp + rp]
 
-        exp &= factor + (op + factor)[0:]
+        factor = u_op_l.opt() + factor_generic + u_op_r.opt()
+
+        factor_alone = u_op_l.opt() + factor_generic
+
+        exp &= factor_alone + (u_op_r.opt() + b_op + factor)[0:]
 
         self.expr = exp
         self.ops = operators
@@ -581,3 +610,17 @@ class ptr(ParserElement):
 
     def parse(self, string, **kw):
         return self.e.parse(string, **kw)
+
+
+# Empty element - does nothing
+
+@singleton
+class EMPTY(ParserElement):
+    def __init__(self):
+        super(self.__class__, self).__init__('')
+
+    def __str__(self):
+        return '<EMPTY>'
+
+    def parse(self, string, **kw):
+        return string, []
