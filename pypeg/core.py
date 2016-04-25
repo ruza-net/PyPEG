@@ -21,6 +21,18 @@ class ParserElement:
 
         self.value = value
 
+    def parse(self, string, **kw):
+        raise NotImplementedError()
+
+    def test(self, string, **kw):
+        try:
+            self.parse(string, **kw)
+
+            return True
+
+        except ParseError:
+            return False
+
     def opt(self):
         return optional(self)
 
@@ -35,6 +47,9 @@ class ParserElement:
             elif type(other) is list and len(other) == 1:
                 other = group(other[0])
 
+            elif type(other) is set and len(other) == 1:
+                other = g(list(other)[0])
+
             else:
                 raise NotImplementedError()
 
@@ -47,6 +62,9 @@ class ParserElement:
 
             elif type(other) is list and len(other) == 1:
                 other = group(other[0])
+
+            elif type(other) is set and len(other) == 1:
+                other = g(list(other)[0])
 
             else:
                 raise NotImplementedError()
@@ -72,6 +90,9 @@ class ParserElement:
 
             elif type(other) is list and len(other) == 1:
                 other = group(other[0])
+
+            elif type(other) is set and len(other) == 1:
+                other = g(list(other)[0])
 
             else:
                 raise NotImplementedError()
@@ -115,8 +136,6 @@ class s(ParserElement):
     def __init__(self, value):
         super(s, self).__init__(value)
 
-        self.value = value
-
     def copy(self):
         return s(self.value)
 
@@ -124,44 +143,36 @@ class s(ParserElement):
         return r(self.value)
 
     def __str__(self):
-        return 's\'' + self.value + '\''
+        return 's({})'.format(repr(self.value))
 
     def parse(self, string, **kw):
-        out = []
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
 
         try:
-            out += s(self.value).parse_token(string)
+            a = self.parse_token(string)
 
         except ParseError:
             try:
                 string = replace_ignored(string, **kw)
 
-                out += s(self.value).parse_token(string)
+                a = self.parse_token(string)
 
             except ParseError:
                 raise ParseError(
-                    ('Invalid syntax at: "{}"\n' + ' ' * 23 + 'Expecting: "{}"').format(string, self.value))
+                    'Invalid syntax at: "{}"\nExpecting: "{}"'.format(string, self.value))
 
         string = string[len(self.value):]
 
         check_whole(string, **kw)
 
-        return string, out
+        return string, [a]
 
     def parse_token(self, string):
-        i = 1
+        if string[:len(self.value)] != self.value:
+            raise ParseError('Can\'t match a single token from: "{}"'.format(string))
 
-        while i <= len(string):
-            try:
-                if self.value != string[:i]:
-                    raise ParseError('Invalid syntax: "{}"'.format(string[:i]))
-
-                return [self.value]
-
-            except ParseError:
-                i += 1
-
-        raise ParseError('Can\'t parse a single token from: "{}"'.format(string))
+        return self.value
 
 
 class r(ParserElement):
@@ -180,11 +191,10 @@ class r(ParserElement):
         return 'r\'{}\''.format(self.pattern.pattern)
 
     def parse(self, string, **kw):
-        try:
-            a = self.pattern.match(string)
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
 
-        except TypeError:
-            raise ParseError('Can match a non-string!')
+        a = self.pattern.match(string)
 
         if a is None:
             string = replace_ignored(string, **kw)
@@ -201,19 +211,42 @@ class r(ParserElement):
         return string, [a.group(0)]
 
 
+class g(ParserElement):
+    __slots__ = ['el']
+
+    def __init__(self, el):
+        super(g, self).__init__('')
+
+        self.el = el
+
+    def __str__(self):
+        return 'g({})'.format(self.el)
+
+    def parse(self, string, **kw):
+        string, a = self.el.parse(string, **kw)
+
+        if type(a) is list and len(a) > 1:
+            a = [a]
+
+        return string, a
+
+
 class group(ParserElement):
-    __slots__ = ['e']
+    __slots__ = ['el']
 
     def __init__(self, el):
         super(group, self).__init__('')
 
-        self.e = el
+        self.el = el
 
     def __str__(self):
-        return '[{}]'.format(self.e)
+        return '[{}]'.format(self.el)
 
     def parse(self, string, **kw):
-        string, a = self.e.parse(string, **kw)
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
+        string, a = self.el.parse(string, **kw)
 
         return string, [a]
 
@@ -231,6 +264,9 @@ class union(ParserElement):
         return str(self.a) + ' | ' + str(self.b)
 
     def parse(self, string, **kw):
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
         try:
             string, a = self.a.parse(string, **kw)
 
@@ -247,19 +283,22 @@ class union(ParserElement):
 
 
 class named(ParserElement):
-    __slots__ = ['e', 'name']
+    __slots__ = ['el', 'name']
 
-    def __init__(self, element, name):
+    def __init__(self, el, name):
         super(named, self).__init__('')
 
-        self.e = element
+        self.el = el
         self.name = name
 
     def __str__(self):
-        return '({}, {})'.format(self.name, self.e)
+        return '({}, {})'.format(self.name, self.el)
 
     def parse(self, string, **kw):
-        string, a = self.e.parse(string, **kw)
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
+        string, a = self.el.parse(string, **kw)
 
         check_whole(string, **kw)
 
@@ -267,21 +306,24 @@ class named(ParserElement):
 
 
 class apply(ParserElement):
-    __slots__ = ['e', 'f']
+    __slots__ = ['el', 'fn']
 
-    def __init__(self, element, func):
+    def __init__(self, el, fn):
         super(apply, self).__init__('')
 
-        self.e = element
-        self.f = func if type(func) in {list, tuple} else (func,)
+        self.el = el
+        self.fn = fn if type(fn) in {list, tuple} else (fn,)
 
     def __str__(self):
-        return '{} // {}'.format(self.e, self.f)
+        return '{} // {}'.format(self.el, self.fn)
 
     def parse(self, string, **kw):
-        string, a = self.e.parse(string, **kw)
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
 
-        a = r_zip(a, self.f)
+        string, a = self.el.parse(string, **kw)
+
+        a = r_zip(a, self.fn)
 
         out = []
 
@@ -296,38 +338,43 @@ class apply(ParserElement):
 
 
 class counter(ParserElement):
-    __slots__ = ['e', 'min', 'max']
+    __slots__ = ['el', 'min', 'max']
 
-    def __init__(self, element, minimal, maximal):
+    def __init__(self, el, min_, max_):
         super(counter, self).__init__('')
 
-        self.min = minimal
-        self.max = maximal
-        self.e = element
+        self.min = min_
+        self.max = max_
+        self.el = el
+
+    def __str__(self):
+        return '({})[{}:{}]'.format(self.el, self.min, self.max)
 
     def parse(self, string, **kw):
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
         out = []
 
-        for i in count():
-            i += 1
+        k = kw.copy()
+        k['not_whole'] = True
 
+        i = 0
+
+        for i in count():
             if i == self.max:
                 break
 
             try:
-                k = kw.copy()
-                k['not_whole'] = True
-
-                string, a = self.e.parse(string, **k)
+                string, a = self.el.parse(string, **k)
 
                 out += a
 
             except ParseError:
-                if i < self.min:
-                    raise ParseError('Invalid syntax at: "{}"'.format(string))
+                break
 
-                else:
-                    break
+        if i < self.min:
+            raise ParseError('Invalid syntax at: {}!'.format(string))
 
         check_whole(string, **kw)
 
@@ -337,15 +384,21 @@ class counter(ParserElement):
 class suppress(ParserElement):
     __slots__ = ['el']
 
-    def __init__(self, element):
+    def __init__(self, el):
         super(suppress, self).__init__('')
 
-        self.el = element
+        self.el = el
 
     def __str__(self):
         return 'suppress({})'.format(self.el)
 
+    def rev(self):
+        return self.el
+
     def parse(self, string, **kw):
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
         string, _ = self.el.parse(string, **kw)
 
         check_whole(string, **kw)
@@ -354,65 +407,78 @@ class suppress(ParserElement):
 
 
 class debugged(ParserElement):
-    __slots__ = ['e', 'f']
+    __slots__ = ['el', 'fn']
 
     def __init__(self, el, fn):
         super(debugged, self).__init__('')
 
-        self.e = el
-        self.f = fn
+        self.el = el
+        self.fn = fn
 
     def parse(self, string, **kw):
-        self.f(self.e, string, **kw)
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
 
-        return self.e.parse(string, **kw)
+        self.fn(self.el, string, **kw)
+
+        return self.el.parse(string, **kw)
 
 
 class optional(ParserElement):
-    __slots__ = ['e']
+    __slots__ = ['el']
 
-    def __init__(self, element):
+    def __init__(self, el):
         super(optional, self).__init__('')
 
-        self.e = element
+        self.el = el
 
     def parse(self, string, **kw):
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
         try:
-            return self.e.parse(string, **kw)
+            return self.el.parse(string, **kw)
 
         except ParseError:
             return string, []
 
 
 class negative(ParserElement):
-    __slots__ = ['e']
+    __slots__ = ['el']
 
-    def __init__(self, element):
+    def __init__(self, el):
         super(negative, self).__init__('')
 
-        self.e = element
+        self.el = el
 
     def parse(self, string, **kw):
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
         try:
-            self.e.parse(string, **kw)
+            self.el.parse(string, **kw)
 
         except ParseError:
             return string, []
 
-        raise ParseError(('Syntax error at: "{}"\n' + ' ' * 23 + 'Expecting anything but: "{}"').format(string, self.e))
+        raise ParseError(
+            ('Syntax error at: "{}"\n' + ' ' * 23 + 'Expecting anything but: "{}"').format(string, self.el))
 
 
 class take_out(ParserElement):
-    __slots__ = ['e', 'name']
+    __slots__ = ['el', 'name']
 
-    def __init__(self, element, name):
+    def __init__(self, el, name):
         super(take_out, self).__init__('')
 
-        self.e = element
+        self.el = el
         self.name = name
 
     def parse(self, string, **kw):
-        string, a = self.e.parse(string, **kw)
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
+        string, a = self.el.parse(string, **kw)
 
         a = [x.value for x in a if type(x) is tuple and x[0] == self.name]
 
@@ -442,6 +508,9 @@ class combinator(ParserElement):
         return str(self.a) + ' + ' + str(self.b)
 
     def parse(self, string, **kw):
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
         out = []
 
         try:
@@ -478,6 +547,8 @@ class expr(ParserElement):
         UNARY = 0
         BINARY = 1
 
+    __slots__ = ['expr', 'ops', 'operand']
+
     def __init__(self, operand, operators, lp='(', rp=')'):
         super(expr, self).__init__('')
 
@@ -488,14 +559,14 @@ class expr(ParserElement):
             elif o[2] not in [0, 1]:
                 raise ValueError('Invalid associativity!')
 
-        b_op = EMPTY
+        b_op = None
 
-        u_op_l = EMPTY  # A binary operator that stands at left from its operand.
-        u_op_r = EMPTY  # A binary operator that stands at right from its operand.
+        u_op_l = None  # A binary operator that stands at left from its operand.
+        u_op_r = None  # A binary operator that stands at right from its operand.
 
         for i, x in enumerate(operators):
             if x[1] == expr.Type.BINARY:
-                if b_op is EMPTY:
+                if b_op is None:
                     b_op = x[0]
 
                     if not isinstance(b_op, ParserElement):
@@ -506,7 +577,7 @@ class expr(ParserElement):
 
             else:
                 if x[2] == expr.Associativity.LEFT:
-                    if u_op_l is EMPTY:
+                    if u_op_l is None:
                         u_op_l = x[0]
 
                         if not isinstance(u_op_l, ParserElement):
@@ -516,7 +587,7 @@ class expr(ParserElement):
                         u_op_l |= x[0]
 
                 else:
-                    if u_op_r is EMPTY:
+                    if u_op_r is None:
                         u_op_r = x[0]
 
                         if not isinstance(u_op_r, ParserElement):
@@ -525,6 +596,9 @@ class expr(ParserElement):
                     else:
                         u_op_r |= x[0]
 
+        u_op_l = u_op_l[0:] if u_op_l is not None else EMPTY
+        u_op_r = u_op_r[0:] if u_op_r is not None else EMPTY
+
         lp = s(lp).spr()
         rp = s(rp).spr()
 
@@ -532,23 +606,26 @@ class expr(ParserElement):
 
         factor_generic = operand | [lp + exp + rp]
 
-        factor = u_op_l.opt() + factor_generic + u_op_r.opt()
+        factor = u_op_l + factor_generic + u_op_r
 
-        factor_alone = u_op_l.opt() + factor_generic
+        factor_alone = u_op_l + factor_generic
 
-        exp &= factor_alone + (u_op_r.opt() + b_op + factor)[0:]
+        exp &= factor_alone + (u_op_r + b_op + factor)[0:]
 
         self.expr = exp
         self.ops = operators
         self.operand = operand
 
     def parse(self, string, **kw):
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
         kw = kw.copy()
         kw['not_whole'] = True
 
         string, a = self.expr.parse(string, **kw)
 
-        a = associate(self.ops, a)
+        a = associate(self.operand, self.ops, a)
 
         if len(a) > 1:
             a = [a]
@@ -559,36 +636,33 @@ class expr(ParserElement):
 
 
 class delim_lst(ParserElement):
-    __slots__ = ['e', 's', 'aloc', 'min', 'max']
+    __slots__ = ['el', 'expr']
 
-    def __init__(self, el, sep, at_least_one_comma=True, min=0, max=None):
+    EXTRA_COMMA_ALLOWED = 1
+    EXTRA_COMMA_REQUIRED = 2
+
+    def __init__(self, el, sep, **kwargs):
         super(delim_lst, self).__init__('')
 
-        self.e = el
-        self.s = sep
+        extra_comma = kwargs.get('extra_comma', 1)
 
-        self.min = min
-        self.max = max
+        min_c, max_c = kwargs.get('comma_count', [0, None])
 
-        self.aloc = at_least_one_comma
+        self.el = el
+
+        self.expr = g(el) + (sep + g(el))[min_c:max_c]
+
+        if extra_comma == 1:
+            self.expr += sep.opt()
+
+        elif extra_comma == 2:
+            self.expr += sep
 
     def parse(self, string, **kw):
-        string, a = (self.e + (self.s + self.e)[self.min:self.max]).parse(string, **kw)
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
 
-        if self.aloc:
-            elements = []
-
-            for x in a:
-                try:
-                    self.e.parse(x)
-
-                    elements.append(x)
-
-                except ParseError:
-                    pass
-
-            if len(elements) < 2:
-                raise ParseError('Delimited list has no comma!')
+        string, a = self.expr.parse(string, **kw)
 
         return string, a
 
@@ -603,12 +677,18 @@ class ptr(ParserElement):
 
         self.e = None
 
+    def __str__(self):
+        return '&{}'.format(id(self))
+
     def __iand__(self, other):
         self.e = other
 
         return self
 
     def parse(self, string, **kw):
+        if type(string) is not str:
+            raise ParseError('Can\'t match non-string!')
+
         return self.e.parse(string, **kw)
 
 

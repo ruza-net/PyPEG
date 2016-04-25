@@ -1,5 +1,6 @@
 from itertools import cycle
 
+
 __author__ = 'Jan Růžička'
 __email__ = 'jan.ruzicka01@gmail.com'
 
@@ -79,6 +80,16 @@ def check_whole(string, **kw):
         raise ParseError('Full string cannot be matched, this remains: "{}"'.format(string))
 
 
+def static_vars(**attrs):
+    def __dec__(f):
+        for k, v in attrs.items():
+            setattr(f, k, v)
+
+        return f
+
+    return __dec__
+
+
 def recursive_reverse(lst):
     if type(lst) is list:
         lst = lst[::-1]
@@ -90,50 +101,68 @@ def recursive_reverse(lst):
     return lst
 
 
-def associate(ops, a):
+@static_vars(cache=[])
+def associate(operand, ops, a):
+    if (operand, ops, a) in associate.cache:
+        return associate.cache[associate.cache.index((operand, ops, a)) + 1]
+
+    else:
+        bak = a.copy()
+
     for i, x in enumerate(a):
         if type(x) is list:
-            a[i] = associate(ops, x)
+            a[i] = associate(operand, ops, x)
 
     # Hunt for unary operators
 
     for o in [x for x in ops if x[1] == 0]:
-        i = 0
+        restart = True
 
-        while i < len(a):
-            x = a[i]
+        while restart:
+            i = 0
 
-            try:
-                o[0].parse(x)
+            restart = False
 
-                if i > 0:
-                    binary_check = []  # Check for conflicts (e.g. binary plus confused with unary plus).
+            while i < len(a):
+                try:
+                    o[0].parse(a[i])
 
-                    for x in [x for x in ops if x[1] == 1]:
-                        try:
-                            binary_check.append(x[0].parse(a[i-1]))
+                    try:
+                        if type(a[i+1]) is not list:
+                            operand.parse(a[i+1])
 
-                        except ParseError:
-                            continue
+                    except (IndexError, ParseError):
+                        restart = True
 
-                    if len(binary_check) == 0:
                         i += 1
 
                         continue
 
-                if o[2] == 0:
-                    a = a[:i] + [a[i:i+2]] + a[i+2:]
+                    for x in [x[0] for x in ops if x[1] == 1]:
+                        try:
+                            x.parse(a[i-1])
 
-                else:
-                    a = a[:i-1] + [a[i-1:i+1]] + a[i+1:]
+                            break
 
-                i = 0
-                continue
+                        except (IndexError, ParseError):
+                            continue
 
-            except ParseError:
-                pass
+                    else:
+                        break
 
-            i += 1
+                    if o[2] == 0:
+                        a = a[:i] + [a[i:i+2]] + a[i+2:]
+
+                    else:
+                        a = a[:i-1] + [a[i-1:i+1]] + a[i+1:]
+
+                    i = 0
+                    continue
+
+                except ParseError:
+                    pass
+
+                i += 1
 
     for o in [x for x in ops if x[1] == 1]:
         i = 0
@@ -142,10 +171,8 @@ def associate(ops, a):
             a = recursive_reverse(a)
 
         while i < len(a):
-            x = a[i]
-
             try:
-                o[0].parse(x)
+                o[0].parse(a[i])
 
                 a = a[:i-1] + [a[i-1:i+2]] + a[i+2:]
 
@@ -162,6 +189,8 @@ def associate(ops, a):
 
     while len(a) == 1 and type(a[0]) is list:
         a = a[0]
+
+    associate.cache += [(operand, ops, bak), a]
 
     return a
 
