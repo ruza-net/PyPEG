@@ -1,3 +1,4 @@
+import pypeg.core
 from itertools import cycle
 
 
@@ -46,17 +47,20 @@ def replace_ignored(string, **kw):
     ig = kw.get('ignore', None)
     sep = kw.get('sep', None)
 
-    if ig is not None and type(ig) is not str:
-        raise TypeError('Expected str, got {}!'.format(type(ig)))
+    if ig is not None and type(ig) is str:
+        ig = pypeg.core.s(ig)
+
+    if sep is not None and type(sep) is str:
+        sep = pypeg.core.s(sep)
 
     while True:
-        if sep is not None and string[:len(sep)] == sep:
-            string = string[len(sep):]
+        if sep is not None and sep.test(string, not_whole=True):
+            string, _ = sep.parse(string, not_whole=True)
 
             sep = None
 
-        elif ig is not None and string[:len(ig)] == ig:
-            string = string[len(ig):]
+        elif ig is not None and ig.test(string, not_whole=True):
+            string, _ = ig.parse(string, not_whole=True)
 
         else:
             break
@@ -74,10 +78,11 @@ def separate(string, **kw):
 
 
 def check_whole(string, **kw):
-    string = replace_ignored(string, **kw)
+    if not kw.get('not_whole', False):
+        string = replace_ignored(string, **kw)
 
-    if len(string) > 0 and not kw.get('not_whole', False):
-        raise ParseError('Full string cannot be matched, this remains: "{}"'.format(string))
+        if len(string) > 0 and not kw.get('not_whole', False):
+            raise ParseError('Full string cannot be matched, this remains: "{}"'.format(string))
 
 
 def static_vars(**attrs):
@@ -111,11 +116,15 @@ def associate(operand, ops, a):
 
     for i, x in enumerate(a):
         if type(x) is list:
-            a[i] = associate(operand, ops, x)
+            if len(x) == 1:
+                a[i] = x[0]
+
+            else:
+                a[i] = associate(operand, ops, x)
 
     # Hunt for unary operators
 
-    for o in [x for x in ops if x[1] == 0]:
+    for o in [x for x in ops if x[1] == 1]:
         restart = True
 
         while restart:
@@ -128,17 +137,15 @@ def associate(operand, ops, a):
                     o[0].parse(a[i])
 
                     try:
-                        if type(a[i+1]) is not list:
+                        if type(a[i+1]) not in {list, tuple}:
                             operand.parse(a[i+1])
 
                     except (IndexError, ParseError):
-                        restart = True
-
                         i += 1
 
                         continue
 
-                    for x in [x[0] for x in ops if x[1] == 1]:
+                    for x in [x[0] for x in ops if x[1] == 2]:
                         try:
                             x.parse(a[i-1])
 
@@ -164,7 +171,7 @@ def associate(operand, ops, a):
 
                 i += 1
 
-    for o in [x for x in ops if x[1] == 1]:
+    for o in [x for x in ops if x[1] == 2]:
         i = 0
 
         if o[2] == 1:  # Right associative

@@ -71,6 +71,22 @@ class ParserElement:
 
         return other.spr() + self + other.spr()
 
+    def __truediv__(self, other):
+        if not isinstance(other, ParserElement):
+            if type(other) is str:
+                other = s(other)
+
+            elif type(other) is list and len(other) == 1:
+                other = group(other[0])
+
+            elif type(other) is set and len(other) == 1:
+                other = g(list(other)[0])
+
+            else:
+                raise NotImplementedError()
+
+        return libra(self, other)
+
     def __matmul__(self, other):
         if not hasattr(other, '__call__'):
             raise NotImplementedError()
@@ -120,7 +136,7 @@ class ParserElement:
         if type(item) is not slice:
             raise NotImplementedError()
 
-        if item.stop is not None and item.stop < item.start:
+        if item.stop is not None and -1 < item.stop < item.start:
             print('Warning: Minimal count is bigger than maximal count, '
                   'just letting you know that the maximal count will be used!')
 
@@ -337,10 +353,69 @@ class apply(ParserElement):
         return string, out
 
 
+class libra(ParserElement):
+    __slots__ = ['a', 'b', 'merge']
+
+    def __init__(self, a, b, merge=False):
+        super(libra, self).__init__('')
+
+        self.a = a
+        self.b = b
+
+        self.merge = merge
+
+    def __str__(self):
+        return '{} / {}'.format(self.a, self.b)
+
+    def __truediv__(self, other):
+        if type(other) is bool:
+            self.merge = other
+
+            return self
+
+        else:
+            return libra(self, other)
+
+    def parse(self, string, **kw):
+        a_string, b_string = None, None
+
+        try:
+            a_string, a = self.a.parse(string, **kw)
+
+        except ParseError:
+            a = []
+
+        if self.merge and a_string is not None:
+            try:
+                b_string, b = self.b.parse(a_string, **kw)
+
+                return b_string, a + b
+
+            except ParseError:
+                try:
+                    b_string, b = self.b.parse(string, **kw)
+
+                except ParseError:
+                    b = []
+
+        else:
+            try:
+                b_string, b = self.b.parse(string, **kw)
+
+            except ParseError:
+                b = []
+
+        if a_string is None or len(b_string) < len(a_string):
+            return b_string, b
+
+        elif b_string is None or len(a_string) < len(b_string):
+            return a_string, a
+
+
 class counter(ParserElement):
     __slots__ = ['el', 'min', 'max']
 
-    def __init__(self, el, min_, max_):
+    def __init__(self, el, min_=0, max_=None):
         super(counter, self).__init__('')
 
         self.min = min_
@@ -480,7 +555,7 @@ class take_out(ParserElement):
 
         string, a = self.el.parse(string, **kw)
 
-        a = [x.value for x in a if type(x) is tuple and x[0] == self.name]
+        a = [x[1] for x in a if type(x) is tuple and x[0] == self.name]
 
         out = []
         for x in a:
@@ -514,9 +589,10 @@ class combinator(ParserElement):
         out = []
 
         try:
-            k = {x: y for x, y in kw.items() if x != 'not_whole'}
+            k = kw.copy()
+            k['not_whole'] = True
 
-            string, a = self.a.parse(string, **k, not_whole=True)
+            string, a = self.a.parse(string, **k)
 
             out += a
 
@@ -544,8 +620,8 @@ class expr(ParserElement):
         RIGHT = 1
 
     class Type:
-        UNARY = 0
-        BINARY = 1
+        UNARY = 1
+        BINARY = 2
 
     __slots__ = ['expr', 'ops', 'operand']
 
@@ -553,7 +629,7 @@ class expr(ParserElement):
         super(expr, self).__init__('')
 
         for o in operators:
-            if o[1] not in [0, 1]:
+            if o[1] not in [1, 2]:
                 raise ValueError('Invalid operand count!')
 
             elif o[2] not in [0, 1]:
@@ -604,7 +680,7 @@ class expr(ParserElement):
 
         exp = ptr()
 
-        factor_generic = operand | [lp + exp + rp]
+        factor_generic = g(operand) | [lp + exp + rp]
 
         factor = u_op_l + factor_generic + u_op_r
 
@@ -646,23 +722,39 @@ class delim_lst(ParserElement):
 
         extra_comma = kwargs.get('extra_comma', 1)
 
+        omit_blank = kwargs.get('omit_blank', False)
+
         min_c, max_c = kwargs.get('comma_count', [0, None])
 
         self.el = el
 
-        self.expr = g(el) + (sep + g(el))[min_c:max_c]
+        if omit_blank:
+            sep = sep[1:]
 
-        if extra_comma == 1:
-            self.expr += sep.opt()
+        if extra_comma == 1 and min_c > 0:
+            self.expr = g(el) + (sep + g(el))[min_c:max_c] / sep / True
 
-        elif extra_comma == 2:
-            self.expr += sep
+        else:
+            if max_c is not None:
+                max_c -= 1
+
+            self.expr = g(el) + (sep + g(el))[min_c:max_c]
+
+            if extra_comma == 1:
+                self.expr += sep.opt()
+
+            elif extra_comma == 2:
+                self.expr += sep
+
+            self.expr = self.expr.opt()
 
     def parse(self, string, **kw):
         if type(string) is not str:
             raise ParseError('Can\'t match non-string!')
 
         string, a = self.expr.parse(string, **kw)
+
+        check_whole(string, **kw)
 
         return string, a
 
