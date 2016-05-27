@@ -1,12 +1,23 @@
 import sre_constants
 from re import compile
+
 from pypeg.utils import *
+
 from itertools import count
+from functools import reduce
+
+from operator import add
 
 __author__ = 'Jan Růžička'
 __email__ = 'jan.ruzicka01@gmail.com'
 
 __version__ = '0.1'
+
+__all__ = ['ParseError', 'ParserElement', 's', 'r', 'g', 'G', 'group', 'combo', 'union', 'named', 'apply', 'libra',
+           'counter', 'suppress', 'debugged', 'optional', 'negative', 'take_out', 'combinator', 'expr', 'delim_lst',
+           'ind_block', 'ptr', 'EMPTY', 'trim_comments']
+
+indent_level_force = None
 
 
 # Primitive class
@@ -47,8 +58,8 @@ class ParserElement:
             elif type(other) is list and len(other) == 1:
                 other = group(other[0])
 
-            elif type(other) is set and len(other) == 1:
-                other = g(list(other)[0])
+            elif type(other) is tuple and len(other) == 1:
+                other = G(g(other[0]))
 
             else:
                 raise NotImplementedError()
@@ -71,6 +82,16 @@ class ParserElement:
 
         return other.spr() + self + other.spr()
 
+    def __mul__(self, other):
+        if type(other) is int:
+            return reduce(add, [self] * other)
+
+        elif type(other) is tuple and len(other) == 2:
+            return observer(self, *other)
+
+        else:
+            raise NotImplementedError()
+
     def __truediv__(self, other):
         if not isinstance(other, ParserElement):
             if type(other) is str:
@@ -88,10 +109,10 @@ class ParserElement:
         return libra(self, other)
 
     def __matmul__(self, other):
-        if not hasattr(other, '__call__'):
+        if type(other) not in {list, tuple} or len(other) != 2:
             raise NotImplementedError()
 
-        return debugged(self, other)
+        return debugged(self, *other)
 
     def __floordiv__(self, other):
         if not hasattr(other, '__call__') and len([x for x in other if not hasattr(x, '__call__')]) > 1:
@@ -115,9 +136,29 @@ class ParserElement:
 
         return union(self, other)
 
+    def __xor__(self, other):
+        if isinstance(other, ParserElement):
+            return longest(self, other)
+
+        else:
+            raise NotImplementedError()
+
     def __eq__(self, other):
         if type(other) is str:
             return named(self, other)
+
+        elif isinstance(other, ParserElement):
+            if type(self) is not type(other):
+                return False
+
+            if hasattr(self, 'el') and (not hasattr(other, 'el') or self.el != other.el):
+                return False
+
+            elif hasattr(self, 'a') and (not hasattr(other, 'a') or self.a != other.a or self.b != other.b):
+                return False
+
+            else:
+                return self.value == other.value
 
         else:
             raise NotImplementedError()
@@ -231,7 +272,7 @@ class g(ParserElement):
     __slots__ = ['el']
 
     def __init__(self, el):
-        super(g, self).__init__('')
+        super(g, self).__init__(el.value)
 
         self.el = el
 
@@ -247,11 +288,31 @@ class g(ParserElement):
         return string, a
 
 
+class G(ParserElement):
+    __slots__ = ['el']
+
+    def __init__(self, el):
+        super(G, self).__init__(el.value)
+
+        self.el = el
+
+    def __str__(self):
+        return 'G({})'.format(self.el)
+
+    def parse(self, string, **kw):
+        string, a = self.el.parse(string, **kw)
+
+        if len(a) == 0 or type(a[0]) not in {list, tuple}:
+            a = [a]
+
+        return string, a
+
+
 class group(ParserElement):
     __slots__ = ['el']
 
     def __init__(self, el):
-        super(group, self).__init__('')
+        super(group, self).__init__(el.value)
 
         self.el = el
 
@@ -267,17 +328,47 @@ class group(ParserElement):
         return string, [a]
 
 
+class combo(ParserElement):
+    __slots__ = ['el']
+
+    def __init__(self, el):
+        super(combo, self).__init__(el.value)
+
+        self.el = el
+
+    def parse(self, string, **kw):
+        string, a = self.el.parse(string, **kw)
+
+        out = []
+
+        for x in a:
+            if len(out) == 0:
+                out.append(x)
+
+            elif isinstance(x, type(out[-1])):
+                try:
+                    out[-1] += x
+
+                except AttributeError:
+                    out.append(x)
+
+            else:
+                out.append(x)
+
+        return string, out
+
+
 class union(ParserElement):
     __slots__ = ['a', 'b']
 
     def __init__(self, a, b):
-        super(union, self).__init__('')
+        super(union, self).__init__(a.value)
 
         self.a = a
         self.b = b
 
     def __str__(self):
-        return str(self.a) + ' | ' + str(self.b)
+        return '({} | {})'.format(self.a, self.b)
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -302,7 +393,7 @@ class named(ParserElement):
     __slots__ = ['el', 'name']
 
     def __init__(self, el, name):
-        super(named, self).__init__('')
+        super(named, self).__init__(el.value)
 
         self.el = el
         self.name = name
@@ -318,6 +409,9 @@ class named(ParserElement):
 
         check_whole(string, **kw)
 
+        if len(a) == 1:
+            a = a[0]
+
         return string, [(self.name, a)]
 
 
@@ -325,10 +419,10 @@ class apply(ParserElement):
     __slots__ = ['el', 'fn']
 
     def __init__(self, el, fn):
-        super(apply, self).__init__('')
+        super(apply, self).__init__(el.value)
 
         self.el = el
-        self.fn = fn if type(fn) in {list, tuple} else (fn,)
+        self.fn = fn
 
     def __str__(self):
         return '{} // {}'.format(self.el, self.fn)
@@ -339,25 +433,16 @@ class apply(ParserElement):
 
         string, a = self.el.parse(string, **kw)
 
-        a = r_zip(a, self.fn)
-
-        out = []
-
-        for x in a:
-            o = x[1](x[0])
-
-            out.append(o)
-
         check_whole(string, **kw)
 
-        return string, out
+        return string, map(self.fn, a)
 
 
 class libra(ParserElement):
     __slots__ = ['a', 'b', 'merge']
 
     def __init__(self, a, b, merge=False):
-        super(libra, self).__init__('')
+        super(libra, self).__init__(a.value if len(a.value) > len(b.value) else b.value)
 
         self.a = a
         self.b = b
@@ -365,7 +450,7 @@ class libra(ParserElement):
         self.merge = merge
 
     def __str__(self):
-        return '{} / {}'.format(self.a, self.b)
+        return '{} / {} / {}'.format(self.a, self.b, self.merge)
 
     def __truediv__(self, other):
         if type(other) is bool:
@@ -416,7 +501,7 @@ class counter(ParserElement):
     __slots__ = ['el', 'min', 'max']
 
     def __init__(self, el, min_=0, max_=None):
-        super(counter, self).__init__('')
+        super(counter, self).__init__(el.value * min_)
 
         self.min = min_
         self.max = max_
@@ -456,11 +541,49 @@ class counter(ParserElement):
         return string, out
 
 
+class longest(ParserElement):
+    __slots__ = ['a', 'b']
+
+    def __init__(self, a, b):
+        super(longest, self).__init__(b.value if len(b.value) > len(a.value) else a.value)
+
+        self.a = a
+        self.b = b
+
+    def __str__(self):
+        return '({} ^ {})'.format(self.a, self.b)
+
+    def parse(self, string, **kw):
+        kw = kw.copy()
+        kw['not_whole'] = True
+
+        s1 = s2 = string
+
+        a1, a2 = [], []
+
+        try:
+            s1, a1 = self.a.parse(string, **kw)
+
+        except ParseError:
+            pass
+
+        try:
+            s2, a2 = self.b.parse(string, **kw)
+
+        except ParseError:
+            pass
+
+        if len(s1) == len(s2) == len(string):
+            raise ParseError('Both cases failed!')
+
+        return (s1, a1) if len(s1) < len(s2) else (s2, a2)
+
+
 class suppress(ParserElement):
     __slots__ = ['el']
 
     def __init__(self, el):
-        super(suppress, self).__init__('')
+        super(suppress, self).__init__(el.value)
 
         self.el = el
 
@@ -482,21 +605,27 @@ class suppress(ParserElement):
 
 
 class debugged(ParserElement):
-    __slots__ = ['el', 'fn']
+    __slots__ = ['el', 'a_fn', 'b_fn']
 
-    def __init__(self, el, fn):
-        super(debugged, self).__init__('')
+    def __init__(self, el, a_fn=None, b_fn=None):
+        super(debugged, self).__init__(el.value)
 
         self.el = el
-        self.fn = fn
+
+        self.a_fn = a_fn if a_fn else lambda el, string, **kw: print('A', el, repr(string))
+        self.b_fn = b_fn if b_fn else lambda el, string, **kw: print('B', el, repr(string))
 
     def parse(self, string, **kw):
         if type(string) is not str:
             raise ParseError('Can\'t match non-string!')
 
-        self.fn(self.el, string, **kw)
+        self.a_fn(self.el, string, **kw)
 
-        return self.el.parse(string, **kw)
+        string, a = self.el.parse(string, **kw)
+
+        self.b_fn(self.el, string, **kw)
+
+        return string, a
 
 
 class optional(ParserElement):
@@ -506,6 +635,9 @@ class optional(ParserElement):
         super(optional, self).__init__('')
 
         self.el = el
+
+    def __str__(self):
+        return '({}).opt()'.format(self.el)
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -544,10 +676,14 @@ class take_out(ParserElement):
     __slots__ = ['el', 'name']
 
     def __init__(self, el, name):
-        super(take_out, self).__init__('')
+        super(take_out, self).__init__(el.value)
 
         self.el = el
         self.name = name
+
+    def __str__(self):
+        return str(self.el.el) if type(self.el) is named and self.el.name == self.name\
+                               else '({} >> {})'.format(self.el, self.name)
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -570,17 +706,49 @@ class take_out(ParserElement):
         return string, out
 
 
+class observer(ParserElement):
+    __slots__ = ['el', 'success', 'failure']
+
+    def __init__(self, el, success, failure):
+        super(observer, self).__init__(el.value)
+
+        if type(success) is not list:
+            success = [success]
+
+        if type(failure) is not list:
+            failure = [failure]
+
+        self.el = el
+        self.success = success
+        self.failure = failure
+
+    def __str__(self):
+        return 'observer({}, {}, {})'.format(self.el, self.success, self.failure)
+
+    def parse(self, string, **kw):
+        try:
+            kw = kw.copy()
+            kw['not_whole'] = True
+
+            string, a = self.el.parse(string, **kw)
+
+            return string, self.success if a else self.failure
+
+        except ParseError:
+            return string, self.failure
+
+
 class combinator(ParserElement):
     __slots__ = ['a', 'b']
 
     def __init__(self, a, b):
-        super(combinator, self).__init__('')
+        super(combinator, self).__init__(a.value + b.value)
 
         self.a = a
         self.b = b
 
     def __str__(self):
-        return str(self.a) + ' + ' + str(self.b)
+        return '{} + {}'.format(self.a, self.b)
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -637,11 +805,13 @@ class expr(ParserElement):
 
         b_op = None
 
-        u_op_l = None  # A binary operator that stands at left from its operand.
-        u_op_r = None  # A binary operator that stands at right from its operand.
+        b_op_lst = [x[0] for x in operators if x[1] == 2]
+
+        u_op_l = None  # An unary operator that stands at left from its operand.
+        u_op_r = None  # An unary operator that stands at right from its operand.
 
         for i, x in enumerate(operators):
-            if x[1] == expr.Type.BINARY:
+            if x[1] == 2:
                 if b_op is None:
                     b_op = x[0]
 
@@ -649,9 +819,9 @@ class expr(ParserElement):
                         b_op = s(b_op)
 
                 else:
-                    b_op |= x[0]
+                    b_op ^= x[0]
 
-            else:
+            elif x[0] not in b_op_lst:
                 if x[2] == expr.Associativity.LEFT:
                     if u_op_l is None:
                         u_op_l = x[0]
@@ -660,7 +830,7 @@ class expr(ParserElement):
                             u_op_l = s(u_op_l)
 
                     else:
-                        u_op_l |= x[0]
+                        u_op_l ^= x[0]
 
                 else:
                     if u_op_r is None:
@@ -670,7 +840,7 @@ class expr(ParserElement):
                             u_op_r = s(u_op_r)
 
                     else:
-                        u_op_r |= x[0]
+                        u_op_r ^= x[0]
 
         u_op_l = u_op_l[0:] if u_op_l is not None else EMPTY
         u_op_r = u_op_r[0:] if u_op_r is not None else EMPTY
@@ -684,9 +854,7 @@ class expr(ParserElement):
 
         factor = u_op_l + factor_generic + u_op_r
 
-        factor_alone = u_op_l + factor_generic
-
-        exp &= factor_alone + (u_op_r + b_op + factor)[0:]
+        exp &= factor + (b_op + factor)[0:]
 
         self.expr = exp
         self.ops = operators
@@ -720,10 +888,10 @@ class delim_lst(ParserElement):
     def __init__(self, el, sep, **kwargs):
         super(delim_lst, self).__init__('')
 
+        req_one = kwargs.get('req_one', False)
+
         extra_comma = kwargs.get('extra_comma', 1)
-
         omit_blank = kwargs.get('omit_blank', False)
-
         min_c, max_c = kwargs.get('comma_count', [0, None])
 
         self.el = el
@@ -746,7 +914,8 @@ class delim_lst(ParserElement):
             elif extra_comma == 2:
                 self.expr += sep
 
-            self.expr = self.expr.opt()
+            if req_one == 0:
+                self.expr = self.expr.opt()
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -759,21 +928,71 @@ class delim_lst(ParserElement):
         return string, a
 
 
+class ind_block(ParserElement):
+    def __init__(self, el, char=' ', ch_count=4, sep=s('\n'), **kwargs):
+        super(ind_block, self).__init__('')
+
+        if type(char) is not str:
+            raise TypeError('2nd argument `char` must be `str` (got `{}`)!'.format(type(char)))
+
+        if type(sep) is str:
+            sep = s(sep)
+
+        self.el = el
+        self.sep = sep
+        self.ind = s(char * ch_count)
+
+        self.options = kwargs
+
+    def parse(self, string, **kw):
+        lines = split(string, self.sep)
+
+        i = 0
+
+        for i, l in enumerate(lines):
+            try:
+                l, _ = self.ind.parse(l, not_whole=True)
+
+                lines[i] = l
+
+            except ParseError:
+                break
+
+        string = self.sep.value.join(lines)
+
+        out = []
+
+        j = 0
+
+        while j < i:
+            try:
+                string, a = self.el.parse(string, **kw)
+
+                out += a
+
+            except ParseError:
+                break
+
+            j += 1
+
+        return string, out
+
+
 # Pointer to parser element (can be used for recursive grammars)
 
 class ptr(ParserElement):
-    __slots__ = ['e']
+    __slots__ = ['el']
 
     def __init__(self):
         super(ptr, self).__init__('')
 
-        self.e = None
+        self.el = None
 
     def __str__(self):
         return '&{}'.format(id(self))
 
     def __iand__(self, other):
-        self.e = other
+        self.el = other
 
         return self
 
@@ -781,7 +1000,7 @@ class ptr(ParserElement):
         if type(string) is not str:
             raise ParseError('Can\'t match non-string!')
 
-        return self.e.parse(string, **kw)
+        return self.el.parse(string, **kw)
 
 
 # Empty element - does nothing

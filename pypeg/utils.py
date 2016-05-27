@@ -1,5 +1,4 @@
 import pypeg.core
-from itertools import cycle
 
 
 __author__ = 'Jan Růžička'
@@ -14,25 +13,11 @@ class ParseError(Exception):
     pass
 
 
+class BlockInterrupt(Exception):
+    pass
+
+
 # Functions used to process AST.
-
-def r_zip(a, b):
-    if len(a) > len(b):
-        i, c = a, cycle(b)
-
-    elif len(b) < len(a):
-        i, c = b, cycle(a)
-
-    else:
-        return list(zip(a, b))
-
-    out = []
-
-    for x in i:
-        out.append((x, next(c)))
-
-    return out
-
 
 def cut_off(a, string, **kw):
     l = list(map(len, a))
@@ -43,29 +28,75 @@ def cut_off(a, string, **kw):
     return string
 
 
+def split(string, delim):
+    out = []
+
+    if type(delim) is pypeg.suppress:
+        raise TypeError('2nd argument `delim` can\'t be suppressed!')
+
+    line = string
+
+    i = 0
+
+    while i < len(string):
+        try:
+            string, a = delim.parse(string[i:], not_whole=True)
+
+            out.append(line[:len(line) - len(string) - 1 * len(a)])
+
+            line = string
+            i = 0
+
+        except ParseError:
+            i += 1
+
+    out.append(line)
+
+    return [x for x in out if len(x) > 0]
+
+
+def trim_comments(string, comment_marker, end_comment='\n', quote_markers={'"', '\''}):
+    out = ''
+
+    quoted_by = None
+    commented = False
+
+    for c in string:
+        if not commented:
+            if quoted_by is None and c == comment_marker:
+                commented = True
+
+                continue
+
+            elif c in quote_markers:
+                quoted_by = c if quoted_by is None else None
+
+            out += c
+
+        elif c == end_comment:
+            commented = False
+
+    return out
+
+
 def replace_ignored(string, **kw):
     ig = kw.get('ignore', None)
-    sep = kw.get('sep', None)
 
-    if ig is not None and type(ig) is str:
-        ig = pypeg.core.s(ig)
+    if ig is None:
+        return string
 
-    if sep is not None and type(sep) is str:
-        sep = pypeg.core.s(sep)
+    if type(ig) is not str:
+        raise TypeError('I can ignore parts of string only using RegEx!')
+
+    ig = pypeg.core.compile(ig)
 
     while True:
-        if sep is not None and sep.test(string, not_whole=True):
-            string, _ = sep.parse(string, not_whole=True)
+        a = ig.match(string)
 
-            sep = None
+        if not a:
+            return string
 
-        elif ig is not None and ig.test(string, not_whole=True):
-            string, _ = ig.parse(string, not_whole=True)
-
-        else:
-            break
-
-    return string
+        string = string[len(a.group(0)):]
 
 
 def separate(string, **kw):
@@ -104,6 +135,20 @@ def recursive_reverse(lst):
                 lst[i] = recursive_reverse(x)
 
     return lst
+
+
+def without_el(source, target):
+    if source == target:
+        return []
+
+    if hasattr(source, 'el'):
+        return without_el(source.el, target)
+
+    elif hasattr(source, 'a') and hasattr(source, 'b'):
+        return without_el(source.a, target) + without_el(source.b, target)
+
+    else:
+        return [source]
 
 
 @static_vars(cache=[])
@@ -170,6 +215,9 @@ def associate(operand, ops, a):
                     pass
 
                 i += 1
+
+    if len(a) < 3:
+        return a
 
     for o in [x for x in ops if x[1] == 2]:
         i = 0
