@@ -13,68 +13,69 @@ class ParseError(Exception):
     pass
 
 
+class FatalParseError(Exception):
+    pass
+
+
 class BlockInterrupt(Exception):
     pass
 
 
+# Functions to help the parser
+
+def to_valid_element(other):
+    if not isinstance(other, pypeg.ParserElement):
+        if type(other) is str:
+            other = pypeg.s(other)
+
+        elif type(other) is list and len(other) == 1:
+            other = pypeg.group(other[0])
+
+        else:
+            raise NotImplementedError()
+
+    return other
+
+
 # Functions used to process AST.
 
-def cut_off(a, string, **kw):
-    l = list(map(len, a))
+def trim_comments(string, comment_marker, *, end_comment='\n', quote_markers=None, nested_comments=True):
+    out = ''
 
-    for x in l:
-        string = replace_ignored(string, **kw)[x:]
+    quote_markers = {'"', '\''} if quote_markers is None else quote_markers
 
-    return string
-
-
-def split(string, delim):
-    out = []
-
-    if type(delim) is pypeg.suppress:
-        raise TypeError('2nd argument `delim` can\'t be suppressed!')
-
-    line = string
+    commented = 0
+    quoted_by = None
 
     i = 0
 
     while i < len(string):
-        try:
-            string, a = delim.parse(string[i:], not_whole=True)
-
-            out.append(line[:len(line) - len(string) - 1 * len(a)])
-
-            line = string
-            i = 0
-
-        except ParseError:
-            i += 1
-
-    out.append(line)
-
-    return [x for x in out if len(x) > 0]
-
-
-def trim_comments(string, comment_marker, end_comment='\n', quote_markers={'"', '\''}):
-    out = ''
-
-    quoted_by = None
-    commented = False
-
-    for c in string:
         if not commented:
-            if quoted_by is None and c == comment_marker:
-                commented = True
+            if quoted_by is None and string[i:len(comment_marker) + i] == comment_marker:
+                commented += 1
+
+                i += 1
 
                 continue
 
-            elif c in quote_markers:
-                quoted_by = c if quoted_by is None else None
+            else:
+                for q in quote_markers:
+                    if string[i:len(q) + i] == q:
+                        if quoted_by == q:
+                            quoted_by = None
 
-            out += c
+                        break
 
-        elif c == end_comment:
-            commented = False
+            out += string[i]
+
+        elif string[i:len(end_comment) + i] == end_comment:
+            commented -= 1 if nested_comments else commented
+
+            i += len(end_comment)
+
+            continue
+
+        i += 1
 
     return out
 
@@ -97,15 +98,6 @@ def replace_ignored(string, **kw):
             return string
 
         string = string[len(a.group(0)):]
-
-
-def separate(string, **kw):
-    sep = kw.get('sep', None)
-
-    if sep is not None and type(sep) is not str:
-        raise TypeError('Expected str, got {}!'.format(type(sep)))
-
-    return string.split(sep)
 
 
 def check_whole(string, **kw):
@@ -137,20 +129,6 @@ def recursive_reverse(lst):
     return lst
 
 
-def without_el(source, target):
-    if source == target:
-        return []
-
-    if hasattr(source, 'el'):
-        return without_el(source.el, target)
-
-    elif hasattr(source, 'a') and hasattr(source, 'b'):
-        return without_el(source.a, target) + without_el(source.b, target)
-
-    else:
-        return [source]
-
-
 @static_vars(cache=[])
 def associate(operand, ops, a):
     if (operand, ops, a) in associate.cache:
@@ -170,66 +148,37 @@ def associate(operand, ops, a):
     # Hunt for unary operators
 
     for o in [x for x in ops if x[1] == 1]:
-        restart = True
-
-        while restart:
-            i = 0
-
-            restart = False
-
-            while i < len(a):
-                try:
-                    o[0].parse(a[i])
-
-                    try:
-                        if type(a[i+1]) not in {list, tuple}:
-                            operand.parse(a[i+1])
-
-                    except (IndexError, ParseError):
-                        i += 1
-
-                        continue
-
-                    for x in [x[0] for x in ops if x[1] == 2]:
-                        try:
-                            x.parse(a[i-1])
-
-                            break
-
-                        except (IndexError, ParseError):
-                            continue
-
-                    else:
-                        break
-
-                    if o[2] == 0:
-                        a = a[:i] + [a[i:i+2]] + a[i+2:]
-
-                    else:
-                        a = a[:i-1] + [a[i-1:i+1]] + a[i+1:]
-
-                    i = 0
-                    continue
-
-                except ParseError:
-                    pass
-
-                i += 1
-
-    if len(a) < 3:
-        return a
-
-    for o in [x for x in ops if x[1] == 2]:
         i = 0
-
-        if o[2] == 1:  # Right associative
-            a = recursive_reverse(a)
 
         while i < len(a):
             try:
                 o[0].parse(a[i])
 
-                a = a[:i-1] + [a[i-1:i+2]] + a[i+2:]
+                try:
+                    if type(a[i+1]) not in {list, tuple}:
+                        operand.parse(a[i+1])
+
+                except (IndexError, ParseError):
+                    i += 1
+
+                    continue
+
+                if i > 0:
+                    try:
+                        if type(a[i-1]) in {list, tuple}:
+                            i += 1
+
+                            continue
+
+                        operand.parse(a[i-1])
+
+                        i += 1
+                        continue
+
+                    except ParseError:
+                        pass
+
+                a = a[:i] + [a[i:i+2]] + a[i+2:]
 
                 i = 0
                 continue
@@ -239,8 +188,60 @@ def associate(operand, ops, a):
 
             i += 1
 
-        if o[2] == 1:  # Right associative
-            a = recursive_reverse(a)
+    if len(a) < 3:
+        return a
+
+    for o in [x for x in ops if x[1] == 2]:
+        i = 0
+
+        if o[2] == 2:  # No-associative - parallel operators
+            j = 0
+
+            while j < len(a):
+                try:
+                    o[0].parse(a[j])
+
+                    break
+
+                except ParseError:
+                    j += 1
+
+            else:
+                continue
+
+            i = j
+
+            while i < len(a):
+                try:
+                    o[0].parse(a[i])
+
+                    i += 2
+
+                except ParseError:
+                    break
+
+            a[j-1:i] = [a[j-1:i]]
+
+        else:
+            if o[2] == 1:  # Right associative
+                a = recursive_reverse(a)
+
+            while i < len(a):
+                try:
+                    o[0].parse(a[i])
+
+                    a = a[:i-1] + [a[i-1:i+2]] + a[i+2:]
+
+                    i = 0
+                    continue
+
+                except ParseError:
+                    pass
+
+                i += 1
+
+            if o[2] == 1:  # Right associative
+                a = recursive_reverse(a)
 
     while len(a) == 1 and type(a[0]) is list:
         a = a[0]

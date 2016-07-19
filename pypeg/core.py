@@ -1,21 +1,21 @@
 import sre_constants
 from re import compile
 
+from operator import add
+
 from pypeg.utils import *
 
 from itertools import count
 from functools import reduce
-
-from operator import add
 
 __author__ = 'Jan Růžička'
 __email__ = 'jan.ruzicka01@gmail.com'
 
 __version__ = '0.1'
 
-__all__ = ['ParseError', 'ParserElement', 's', 'r', 'g', 'G', 'group', 'combo', 'union', 'named', 'apply', 'libra',
-           'counter', 'suppress', 'debugged', 'optional', 'negative', 'take_out', 'combinator', 'expr', 'delim_lst',
-           'ind_block', 'ptr', 'EMPTY', 'trim_comments']
+__all__ = ['ParseError', 'ParserElement', 's', 'r', 'u', 'g', 'G', 'cut', 'wrap', 'group', 'combo', 'union', 'named',
+           'apply', 'libra', 'counter', 'suppress', 'debugged', 'optional', 'negative', 'take_out', 'combinator',
+           'expr', 'delim_lst', 'ptr', 'EMPTY', 'trim_comments']
 
 indent_level_force = None
 
@@ -50,35 +50,26 @@ class ParserElement:
     def spr(self):
         return suppress(self)
 
+    def rev(self):
+        if hasattr(self, 'el'):
+            return self.el
+
+        elif hasattr(self, 'a'):
+            return self.a, self.b
+
+        else:
+            return self.value
+
+    def __pos__(self):
+        return combo(self)
+
     def __add__(self, other):
-        if not isinstance(other, ParserElement):
-            if type(other) is str:
-                other = s(other)
-
-            elif type(other) is list and len(other) == 1:
-                other = group(other[0])
-
-            elif type(other) is tuple and len(other) == 1:
-                other = G(g(other[0]))
-
-            else:
-                raise NotImplementedError()
+        other = to_valid_element(other)
 
         return combinator(self, other)
 
     def __mod__(self, other):
-        if not isinstance(other, ParserElement):
-            if type(other) is str:
-                other = s(other)
-
-            elif type(other) is list and len(other) == 1:
-                other = group(other[0])
-
-            elif type(other) is set and len(other) == 1:
-                other = g(list(other)[0])
-
-            else:
-                raise NotImplementedError()
+        other = to_valid_element(other)
 
         return other.spr() + self + other.spr()
 
@@ -93,26 +84,18 @@ class ParserElement:
             raise NotImplementedError()
 
     def __truediv__(self, other):
-        if not isinstance(other, ParserElement):
-            if type(other) is str:
-                other = s(other)
-
-            elif type(other) is list and len(other) == 1:
-                other = group(other[0])
-
-            elif type(other) is set and len(other) == 1:
-                other = g(list(other)[0])
-
-            else:
-                raise NotImplementedError()
+        other = to_valid_element(other)
 
         return libra(self, other)
 
     def __matmul__(self, other):
-        if type(other) not in {list, tuple} or len(other) != 2:
-            raise NotImplementedError()
+        if type(other) is tuple:
+            if len(other) == 0:
+                other = (None, None)
 
-        return debugged(self, *other)
+            return debugged(self, *other)
+
+        raise NotImplementedError()
 
     def __floordiv__(self, other):
         if not hasattr(other, '__call__') and len([x for x in other if not hasattr(x, '__call__')]) > 1:
@@ -121,44 +104,26 @@ class ParserElement:
         return apply(self, other)
 
     def __or__(self, other):
-        if not isinstance(other, ParserElement):
-            if type(other) is str:
-                other = s(other)
-
-            elif type(other) is list and len(other) == 1:
-                other = group(other[0])
-
-            elif type(other) is set and len(other) == 1:
-                other = g(list(other)[0])
-
-            else:
-                raise NotImplementedError()
+        other = to_valid_element(other)
 
         return union(self, other)
 
     def __xor__(self, other):
-        if isinstance(other, ParserElement):
-            return longest(self, other)
+        other = to_valid_element(other)
 
-        else:
-            raise NotImplementedError()
+        return longest(self, other)
 
     def __eq__(self, other):
         if type(other) is str:
             return named(self, other)
 
         elif isinstance(other, ParserElement):
-            if type(self) is not type(other):
+            if type(self) is not type(other)\
+                    or (hasattr(self, 'el') and (not hasattr(other, 'el') or self.el != other.el))\
+                    or (hasattr(self, 'a') and (not hasattr(other, 'a') or self.a != other.a or self.b != other.b)):
                 return False
 
-            if hasattr(self, 'el') and (not hasattr(other, 'el') or self.el != other.el):
-                return False
-
-            elif hasattr(self, 'a') and (not hasattr(other, 'a') or self.a != other.a or self.b != other.b):
-                return False
-
-            else:
-                return self.value == other.value
+            return self.value == other.value
 
         else:
             raise NotImplementedError()
@@ -187,20 +152,56 @@ class ParserElement:
 # Specialized elements
 
 
+class wrap:
+    __slots__ = ['c', 't']
+
+    class wrapper(ParserElement):
+        __slots__ = ['el', 't', 'c']
+
+        def __init__(self, el, t, c=2):
+            super(wrap.wrapper, self).__init__(el.value)
+
+            self.c = c
+            self.t = t
+            self.el = el
+
+        def parse(self, string, **kw):
+            string, a = self.el.parse(string, **kw)
+
+            check_whole(string, **kw)
+
+            if self.t in {'r', 'right'}:
+                a = recursive_reverse(a)
+
+            while len(a) > 1:
+                a = [a[:self.c]] + a[self.c:]
+
+            if self.t in {'r', 'right'}:
+                a = recursive_reverse(a)
+
+            return string, a
+
+    def __init__(self, t, c=2):
+        self.c = c
+        self.t = t
+
+    def __add__(self, other):
+        other = to_valid_element(other)
+
+        return wrap.wrapper(other, self.t, self.c)
+
+
 class s(ParserElement):
     __slots__ = ['value']
 
     def __init__(self, value):
         super(s, self).__init__(value)
 
-    def copy(self):
-        return s(self.value)
-
     def r(self):
         return r(self.value)
 
     def __str__(self):
-        return 's({})'.format(repr(self.value))
+        return 's{}'.format(repr(self.value))
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -226,7 +227,7 @@ class s(ParserElement):
         return string, [a]
 
     def parse_token(self, string):
-        if string[:len(self.value)] != self.value:
+        if not string.startswith(self.value):
             raise ParseError('Can\'t match a single token from: "{}"'.format(string))
 
         return self.value
@@ -235,14 +236,14 @@ class s(ParserElement):
 class r(ParserElement):
     __slots__ = ['pattern']
 
-    def __init__(self, regex):
-        super(r, self).__init__(regex)
+    def __init__(self, pattern):
+        super(r, self).__init__(pattern)
 
         try:
-            self.pattern = compile(regex)
+            self.pattern = compile(pattern)
 
         except sre_constants.error:
-            raise ValueError('Passed invalid regex: {}'.format(regex))
+            raise ValueError('Passed invalid pattern: {}'.format(pattern))
 
     def __str__(self):
         return 'r\'{}\''.format(self.pattern.pattern)
@@ -252,20 +253,39 @@ class r(ParserElement):
             raise ParseError('Can\'t match non-string!')
 
         a = self.pattern.match(string)
+        b = self.pattern.match(replace_ignored(string, **kw))
+
+        if a is None or (b is not None and len(a.group()) < len(b.group())):
+            a = b
 
         if a is None:
-            string = replace_ignored(string, **kw)
+            raise ParseError('String: "{}" doesn\'t match pattern: "{}"'.format(string, self.pattern.pattern))
 
-            a = self.pattern.match(string)
-
-            if a is None:
-                raise ParseError('String: "{}" doesn\'t match pattern: "{}"'.format(string, self.pattern.pattern))
-
-        string = cut_off([a.group(0)], string, **kw)
+        string = replace_ignored(string, **kw)[len(a.group()):] if a == b else string[len(a.group()):]
 
         check_whole(string, **kw)
 
-        return string, [a.group(0)]
+        return string, [a.group()]
+
+
+class u(ParserElement):
+    __slots__ = ['el']
+
+    def __init__(self, el):
+        super(u, self).__init__(el.value)
+
+        self.el = el
+
+    def __str__(self):
+        return 'u({})'.format(self.el)
+
+    def parse(self, string, **kw):
+        string, a = self.el.parse(string, **kw)
+
+        if type(a) is list and len(a) == 1:
+            a = a[0]
+
+        return string, a
 
 
 class g(ParserElement):
@@ -342,51 +362,65 @@ class combo(ParserElement):
         out = []
 
         for x in a:
-            if len(out) == 0:
+            if len(out) == 0 or not isinstance(x, type(out[-1])):
                 out.append(x)
 
-            elif isinstance(x, type(out[-1])):
+            else:
                 try:
                     out[-1] += x
 
                 except AttributeError:
                     out.append(x)
 
-            else:
-                out.append(x)
-
         return string, out
 
 
 class union(ParserElement):
-    __slots__ = ['a', 'b']
+    __slots__ = ['xs']
 
-    def __init__(self, a, b):
-        super(union, self).__init__(a.value)
+    def __init__(self, *xs):
+        super(union, self).__init__('')
 
-        self.a = a
-        self.b = b
+        self.xs = []
+
+        for x in xs:
+            if type(x) is union:
+                self.xs += x.xs
+
+            elif x is not EMPTY:
+                self.xs.append(x)
 
     def __str__(self):
-        return '({} | {})'.format(self.a, self.b)
+        return ' | '.join([str(x) for x in self.xs])
+
+    def __or__(self, other):
+        other = to_valid_element(other)
+
+        new = union(*self.xs)
+
+        if type(other) is union:
+            new.xs += other.xs
+
+        elif other is EMPTY:
+            pass
+
+        else:
+            new.xs.append(other)
+
+        return new
 
     def parse(self, string, **kw):
         if type(string) is not str:
             raise ParseError('Can\'t match non-string!')
 
-        try:
-            string, a = self.a.parse(string, **kw)
-
-        except ParseError:
+        for x in self.xs:
             try:
-                string, a = self.b.parse(string, **kw)
+                return x.parse(string, **kw)
 
             except ParseError:
-                raise ParseError(('Invalid syntax at: "{}"\n' + ' ' * 23 + 'Expecting: "{}"').format(string, self))
+                pass
 
-        check_whole(string, **kw)
-
-        return string, a
+        raise ParseError('All cases failed!')
 
 
 class named(ParserElement):
@@ -399,7 +433,7 @@ class named(ParserElement):
         self.name = name
 
     def __str__(self):
-        return '({}, {})'.format(self.name, self.el)
+        return ':{}'.format(self.name)
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -435,66 +469,75 @@ class apply(ParserElement):
 
         check_whole(string, **kw)
 
-        return string, map(self.fn, a)
+        return string, list(map(self.fn, a))
 
 
 class libra(ParserElement):
-    __slots__ = ['a', 'b', 'merge']
+    __slots__ = ['xs', 'merge']
 
     def __init__(self, a, b, merge=False):
-        super(libra, self).__init__(a.value if len(a.value) > len(b.value) else b.value)
+        super(libra, self).__init__('')
 
-        self.a = a
-        self.b = b
+        self.xs = [a, b]
 
         self.merge = merge
 
     def __str__(self):
-        return '{} / {} / {}'.format(self.a, self.b, self.merge)
+        return ' / '.join([str(x) for x in self.xs]) + ' / {}'.format(self.merge)
 
     def __truediv__(self, other):
-        if type(other) is bool:
-            self.merge = other
+        new = libra(*self.xs, merge=self.merge)
 
-            return self
+        if type(other) is bool:
+            new.merge = other
 
         else:
-            return libra(self, other)
+            other = to_valid_element(other)
+
+            if type(other) is libra and new.merge == other.merge:
+                new.xs += other.xs
+
+            elif other is EMPTY:
+                pass
+
+            else:
+                new.xs.append(other)
+
+        return new
 
     def parse(self, string, **kw):
-        a_string, b_string = None, None
+        if self.merge:
+            k = kw.copy()
+            k['not_whole'] = True
 
-        try:
-            a_string, a = self.a.parse(string, **kw)
+            solutions = []
 
-        except ParseError:
-            a = []
+            for x in self.xs:
+                string, a = x.parse(string, **k)
 
-        if self.merge and a_string is not None:
-            try:
-                b_string, b = self.b.parse(a_string, **kw)
-
-                return b_string, a + b
-
-            except ParseError:
-                try:
-                    b_string, b = self.b.parse(string, **kw)
-
-                except ParseError:
-                    b = []
+                solutions.append(a)
 
         else:
-            try:
-                b_string, b = self.b.parse(string, **kw)
+            solutions = {}
 
-            except ParseError:
-                b = []
+            for x in self.xs:
+                try:
+                    new_string, a = x.parse(string, **kw)
 
-        if a_string is None or len(b_string) < len(a_string):
-            return b_string, b
+                    solutions[new_string] = a
 
-        elif b_string is None or len(a_string) < len(b_string):
-            return a_string, a
+                except ParseError:
+                    pass
+
+        if len(solutions) == 0:
+            raise ParseError('All cases failed!')
+
+        if self.merge:
+            return string, reduce(add, solutions, [])
+
+        ret = min(solutions.keys(), key=len)
+
+        return ret, solutions[ret]
 
 
 class counter(ParserElement):
@@ -542,41 +585,57 @@ class counter(ParserElement):
 
 
 class longest(ParserElement):
-    __slots__ = ['a', 'b']
+    __slots__ = ['xs']
 
-    def __init__(self, a, b):
-        super(longest, self).__init__(b.value if len(b.value) > len(a.value) else a.value)
+    def __init__(self, *xs):
+        super(longest, self).__init__('')
 
-        self.a = a
-        self.b = b
+        self.xs = []
+
+        for x in xs:
+            if type(x) is longest:
+                self.xs += x.xs
+
+            else:
+                self.xs.append(to_valid_element(x))
 
     def __str__(self):
-        return '({} ^ {})'.format(self.a, self.b)
+        return ' ^ '.join([str(x) for x in self.xs])
+
+    def __xor__(self, other):
+        other = to_valid_element(other)
+
+        new = longest(*self.xs)
+
+        if type(other) is longest:
+            new.xs += other.xs
+
+        elif other is EMPTY:
+            pass
+
+        else:
+            new.xs.append(other)
+
+        return new
 
     def parse(self, string, **kw):
-        kw = kw.copy()
-        kw['not_whole'] = True
+        solutions = {}
 
-        s1 = s2 = string
+        for x in self.xs:
+            try:
+                new_string, a = x.parse(string, **kw)
 
-        a1, a2 = [], []
+                solutions[new_string] = a
 
-        try:
-            s1, a1 = self.a.parse(string, **kw)
+            except ParseError:
+                pass
 
-        except ParseError:
-            pass
+        if len(solutions) == 0:
+            raise ParseError('All cases failed!')
 
-        try:
-            s2, a2 = self.b.parse(string, **kw)
+        ret = min(solutions.keys(), key=len)
 
-        except ParseError:
-            pass
-
-        if len(s1) == len(s2) == len(string):
-            raise ParseError('Both cases failed!')
-
-        return (s1, a1) if len(s1) < len(s2) else (s2, a2)
+        return ret, solutions[ret]
 
 
 class suppress(ParserElement):
@@ -588,10 +647,7 @@ class suppress(ParserElement):
         self.el = el
 
     def __str__(self):
-        return 'suppress({})'.format(self.el)
-
-    def rev(self):
-        return self.el
+        return '{}.spr()'.format(self.el)
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -612,8 +668,8 @@ class debugged(ParserElement):
 
         self.el = el
 
-        self.a_fn = a_fn if a_fn else lambda el, string, **kw: print('A', el, repr(string))
-        self.b_fn = b_fn if b_fn else lambda el, string, **kw: print('B', el, repr(string))
+        self.a_fn = a_fn if a_fn else lambda e, string, **kw: print('A', e, repr(string))
+        self.b_fn = b_fn if b_fn else lambda e, string, **kw: print('B', e, repr(string))
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -658,6 +714,9 @@ class negative(ParserElement):
 
         self.el = el
 
+    def __str__(self):
+        return '!{}'.format(self.el)
+
     def parse(self, string, **kw):
         if type(string) is not str:
             raise ParseError('Can\'t match non-string!')
@@ -668,12 +727,17 @@ class negative(ParserElement):
         except ParseError:
             return string, []
 
-        raise ParseError(
-            ('Syntax error at: "{}"\n' + ' ' * 23 + 'Expecting anything but: "{}"').format(string, self.el))
+        raise ParseError('Syntax error at: "{}"\nExpecting anything but: "{}"'.format(string, self.el))
 
 
 class take_out(ParserElement):
     __slots__ = ['el', 'name']
+
+    def __new__(cls, *args):
+        if type(args[0]) is named:
+            return args[0].el
+
+        return super(take_out, cls).__new__(cls)
 
     def __init__(self, el, name):
         super(take_out, self).__init__(el.value)
@@ -739,41 +803,65 @@ class observer(ParserElement):
 
 
 class combinator(ParserElement):
-    __slots__ = ['a', 'b']
+    __slots__ = ['xs']
 
-    def __init__(self, a, b):
-        super(combinator, self).__init__(a.value + b.value)
+    def __init__(self, *xs):
+        super(combinator, self).__init__('')
 
-        self.a = a
-        self.b = b
+        self.xs = []
+
+        for x in xs:
+            if type(x) is combinator:
+                self.xs += x.xs
+
+            elif x is not EMPTY:
+                self.xs.append(to_valid_element(x))
 
     def __str__(self):
-        return '{} + {}'.format(self.a, self.b)
+        return ' + '.join([str(x) for x in self.xs])
+
+    def __add__(self, other):
+        other = to_valid_element(other)
+
+        new = combinator(*self.xs)
+
+        if type(other) is combinator:
+            new.xs += other.xs
+
+        elif other is EMPTY:
+            pass
+
+        else:
+            new.xs.append(other)
+
+        return new
 
     def parse(self, string, **kw):
         if type(string) is not str:
             raise ParseError('Can\'t match non-string!')
 
+        k = kw.copy()
+        k['not_whole'] = True
+
         out = []
 
-        try:
-            k = kw.copy()
-            k['not_whole'] = True
+        fatal = False
 
-            string, a = self.a.parse(string, **k)
+        for x in self.xs:
+            if x is cut:
+                fatal = True
 
-            out += a
+            else:
+                try:
+                    string, a = x.parse(string, **k)
 
-        except ParseError:
-            raise
+                    out += a
 
-        try:
-            string, a = self.b.parse(string, **kw)
+                except ParseError as e:
+                    if fatal:
+                        raise FatalParseError(str(e))
 
-            out += a
-
-        except ParseError:
-            raise
+                    raise
 
         check_whole(string, **kw)
 
@@ -783,82 +871,52 @@ class combinator(ParserElement):
 # Helpers
 
 class expr(ParserElement):
-    class Associativity:
-        LEFT = 0
-        RIGHT = 1
-
-    class Type:
-        UNARY = 1
-        BINARY = 2
-
     __slots__ = ['expr', 'ops', 'operand']
 
     def __init__(self, operand, operators, lp='(', rp=')'):
-        super(expr, self).__init__('')
-
         for o in operators:
             if o[1] not in [1, 2]:
                 raise ValueError('Invalid operand count!')
 
-            elif o[2] not in [0, 1]:
+            elif o[2] not in [0, 1, 2]:
                 raise ValueError('Invalid associativity!')
 
         b_op = None
 
-        b_op_lst = [x[0] for x in operators if x[1] == 2]
+        u_op_l = None
 
-        u_op_l = None  # An unary operator that stands at left from its operand.
-        u_op_r = None  # An unary operator that stands at right from its operand.
-
-        for i, x in enumerate(operators):
+        for x in operators:
             if x[1] == 2:
                 if b_op is None:
-                    b_op = x[0]
-
-                    if not isinstance(b_op, ParserElement):
-                        b_op = s(b_op)
+                    b_op = to_valid_element(x[0])
 
                 else:
                     b_op ^= x[0]
 
-            elif x[0] not in b_op_lst:
-                if x[2] == expr.Associativity.LEFT:
-                    if u_op_l is None:
-                        u_op_l = x[0]
+            elif u_op_l is None:
+                u_op_l = to_valid_element(x[0])
 
-                        if not isinstance(u_op_l, ParserElement):
-                            u_op_l = s(u_op_l)
-
-                    else:
-                        u_op_l ^= x[0]
-
-                else:
-                    if u_op_r is None:
-                        u_op_r = x[0]
-
-                        if not isinstance(u_op_r, ParserElement):
-                            u_op_r = s(u_op_r)
-
-                    else:
-                        u_op_r ^= x[0]
+            else:
+                u_op_l ^= x[0]
 
         u_op_l = u_op_l[0:] if u_op_l is not None else EMPTY
-        u_op_r = u_op_r[0:] if u_op_r is not None else EMPTY
 
-        lp = s(lp).spr()
-        rp = s(rp).spr()
+        lp = to_valid_element(lp).spr()
+        rp = to_valid_element(rp).spr()
 
         exp = ptr()
 
-        factor_generic = g(operand) | [lp + exp + rp]
+        factor = g(operand) ^ [lp + exp + rp]
 
-        factor = u_op_l + factor_generic + u_op_r
+        factor = factor ^ u_op_l + factor
 
         exp &= factor + (b_op + factor)[0:]
 
         self.expr = exp
         self.ops = operators
         self.operand = operand
+
+        super(expr, self).__init__(exp.value)
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -880,33 +938,27 @@ class expr(ParserElement):
 
 
 class delim_lst(ParserElement):
-    __slots__ = ['el', 'expr']
+    __slots__ = ['expr']
 
     EXTRA_COMMA_ALLOWED = 1
     EXTRA_COMMA_REQUIRED = 2
 
-    def __init__(self, el, sep, **kwargs):
-        super(delim_lst, self).__init__('')
+    def __init__(self, el, sep, *, req_one=False, extra_comma=1, omit_blank=False, comma_count=None):
+        min_c, max_c = [0, None] if comma_count is None else comma_count
 
-        req_one = kwargs.get('req_one', False)
-
-        extra_comma = kwargs.get('extra_comma', 1)
-        omit_blank = kwargs.get('omit_blank', False)
-        min_c, max_c = kwargs.get('comma_count', [0, None])
-
-        self.el = el
+        el = g(el)
 
         if omit_blank:
-            sep = sep[1:]
+            el = el.opt()
 
         if extra_comma == 1 and min_c > 0:
-            self.expr = g(el) + (sep + g(el))[min_c:max_c] / sep / True
+            self.expr = el + (sep + el)[min_c:max_c] / sep / True
 
         else:
             if max_c is not None:
                 max_c -= 1
 
-            self.expr = g(el) + (sep + g(el))[min_c:max_c]
+            self.expr = el + (sep + el)[min_c:max_c]
 
             if extra_comma == 1:
                 self.expr += sep.opt()
@@ -914,8 +966,10 @@ class delim_lst(ParserElement):
             elif extra_comma == 2:
                 self.expr += sep
 
-            if req_one == 0:
+            if not req_one:
                 self.expr = self.expr.opt()
+
+        super(delim_lst, self).__init__(self.expr.value)
 
     def parse(self, string, **kw):
         if type(string) is not str:
@@ -926,56 +980,6 @@ class delim_lst(ParserElement):
         check_whole(string, **kw)
 
         return string, a
-
-
-class ind_block(ParserElement):
-    def __init__(self, el, char=' ', ch_count=4, sep=s('\n'), **kwargs):
-        super(ind_block, self).__init__('')
-
-        if type(char) is not str:
-            raise TypeError('2nd argument `char` must be `str` (got `{}`)!'.format(type(char)))
-
-        if type(sep) is str:
-            sep = s(sep)
-
-        self.el = el
-        self.sep = sep
-        self.ind = s(char * ch_count)
-
-        self.options = kwargs
-
-    def parse(self, string, **kw):
-        lines = split(string, self.sep)
-
-        i = 0
-
-        for i, l in enumerate(lines):
-            try:
-                l, _ = self.ind.parse(l, not_whole=True)
-
-                lines[i] = l
-
-            except ParseError:
-                break
-
-        string = self.sep.value.join(lines)
-
-        out = []
-
-        j = 0
-
-        while j < i:
-            try:
-                string, a = self.el.parse(string, **kw)
-
-                out += a
-
-            except ParseError:
-                break
-
-            j += 1
-
-        return string, out
 
 
 # Pointer to parser element (can be used for recursive grammars)
@@ -1015,3 +1019,14 @@ class EMPTY(ParserElement):
 
     def parse(self, string, **kw):
         return string, []
+
+
+# Cutting element - when it gets invoked, any error becomes fatal.
+
+@singleton
+class cut(ParserElement):
+    def __init__(self):
+        super(self.__class__, self).__init__('')
+
+    def __str__(self):
+        return '<CUT>'
