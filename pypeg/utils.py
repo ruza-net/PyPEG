@@ -4,7 +4,7 @@ import pypeg.core
 __author__ = 'Jan Růžička'
 __email__ = 'jan.ruzicka01@gmail.com'
 
-__version__ = '0.1'
+__version__ = '1.0'
 
 
 # Classes to help the parser.
@@ -119,136 +119,7 @@ def static_vars(**attrs):
 
 
 def recursive_reverse(lst):
-    if type(lst) is list:
-        lst = lst[::-1]
-
-        for i, x in enumerate(lst):
-            if type(x) in {list, tuple}:
-                lst[i] = recursive_reverse(x)
-
-    return lst
-
-
-@static_vars(cache=[])
-def associate(operand, ops, a):
-    if (operand, ops, a) in associate.cache:
-        return associate.cache[associate.cache.index((operand, ops, a)) + 1]
-
-    else:
-        bak = a.copy()
-
-    for i, x in enumerate(a):
-        if type(x) is list:
-            if len(x) == 1:
-                a[i] = x[0]
-
-            else:
-                a[i] = associate(operand, ops, x)
-
-    # Hunt for unary operators
-
-    for o in [x for x in ops if x[1] == 1]:
-        i = 0
-
-        while i < len(a):
-            try:
-                o[0].parse(a[i])
-
-                try:
-                    if type(a[i+1]) not in {list, tuple}:
-                        operand.parse(a[i+1])
-
-                except (IndexError, ParseError):
-                    i += 1
-
-                    continue
-
-                if i > 0:
-                    try:
-                        if type(a[i-1]) in {list, tuple}:
-                            i += 1
-
-                            continue
-
-                        operand.parse(a[i-1])
-
-                        i += 1
-                        continue
-
-                    except ParseError:
-                        pass
-
-                a = a[:i] + [a[i:i+2]] + a[i+2:]
-
-                i = 0
-                continue
-
-            except ParseError:
-                pass
-
-            i += 1
-
-    if len(a) < 3:
-        return a
-
-    for o in [x for x in ops if x[1] == 2]:
-        i = 0
-
-        if o[2] == 2:  # No-associative - parallel operators
-            j = 0
-
-            while j < len(a):
-                try:
-                    o[0].parse(a[j])
-
-                    break
-
-                except ParseError:
-                    j += 1
-
-            else:
-                continue
-
-            i = j
-
-            while i < len(a):
-                try:
-                    o[0].parse(a[i])
-
-                    i += 2
-
-                except ParseError:
-                    break
-
-            a[j-1:i] = [a[j-1:i]]
-
-        else:
-            if o[2] == 1:  # Right associative
-                a = recursive_reverse(a)
-
-            while i < len(a):
-                try:
-                    o[0].parse(a[i])
-
-                    a = a[:i-1] + [a[i-1:i+2]] + a[i+2:]
-
-                    i = 0
-                    continue
-
-                except ParseError:
-                    pass
-
-                i += 1
-
-            if o[2] == 1:  # Right associative
-                a = recursive_reverse(a)
-
-    while len(a) == 1 and type(a[0]) is list:
-        a = a[0]
-
-    associate.cache += [(operand, ops, bak), a]
-
-    return a
+    return [recursive_reverse(x) if type(x) is list else x for x in lst[::-1]]
 
 
 # Functions to help constructing grammar.
